@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
   }
 
   const cookieHeader = request.headers.get('cookie') ?? ''
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
