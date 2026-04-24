@@ -32,16 +32,59 @@ export async function middleware(request: NextRequest) {
 
   if (isStatic) return supabaseResponse
 
+  // Unauthenticated — send to login (except auth + api routes)
   if (!user && !isAuthRoute && !isApiRoute) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
     return NextResponse.redirect(url)
   }
 
-  if (user && pathname === '/auth/login') {
-    const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
-    return NextResponse.redirect(url)
+  if (user) {
+    // Fetch role for redirect logic
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const role = profile?.role as string | undefined
+
+    // Already on correct role route — let through
+    const onSupplier = pathname.startsWith('/supplier')
+    const onCustomer = pathname.startsWith('/customer')
+    const onDashboard = pathname.startsWith('/dashboard')
+    const onAuth = pathname.startsWith('/auth')
+
+    // Redirect from login to home
+    if (onAuth) {
+      const url = request.nextUrl.clone()
+      url.pathname = role === 'supplier' ? '/supplier' : role === 'admin' ? '/dashboard' : '/customer'
+      return NextResponse.redirect(url)
+    }
+
+    // Redirect root
+    if (pathname === '/') {
+      const url = request.nextUrl.clone()
+      url.pathname = role === 'supplier' ? '/supplier' : role === 'admin' ? '/dashboard' : '/customer'
+      return NextResponse.redirect(url)
+    }
+
+    // Prevent suppliers accessing customer routes and vice versa
+    if (role === 'supplier' && (onCustomer || onDashboard)) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/supplier'
+      return NextResponse.redirect(url)
+    }
+    if (role === 'customer' && (onSupplier || onDashboard)) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/customer'
+      return NextResponse.redirect(url)
+    }
+    if (role === 'admin' && (onSupplier || onCustomer)) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard'
+      return NextResponse.redirect(url)
+    }
   }
 
   return supabaseResponse

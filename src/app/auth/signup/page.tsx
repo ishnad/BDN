@@ -13,6 +13,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [companyName, setCompanyName] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
   const [role, setRole] = useState<UserRole>('customer')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -30,7 +31,7 @@ export default function SignupPage() {
       password,
       options: {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
-        data: { role, company_name: companyName || null },
+        data: { role, company_name: companyName || null, phone_number: role === 'supplier' ? (phoneNumber || null) : null },
       },
     })
 
@@ -104,6 +105,23 @@ export default function SignupPage() {
                 placeholder="Acme Corp (optional)"
               />
             </div>
+
+            {role === 'supplier' && (
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                  Phone number
+                  <span className="ml-1.5 text-xs text-slate-500">(customers will call you on this)</span>
+                </label>
+                <input
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={e => setPhoneNumber(e.target.value)}
+                  required
+                  className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition"
+                  placeholder="+65 6123 4567"
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Email</label>

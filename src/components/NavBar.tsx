@@ -1,8 +1,9 @@
+'use client'
+
 import Link from 'next/link'
 import { Phone, LogOut } from 'lucide-react'
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { signOut } from '@/app/actions'
 import type { Profile } from '@/types'
 import type { User } from '@supabase/supabase-js'
 
@@ -11,14 +12,7 @@ interface NavBarProps {
   profile: Profile | null
 }
 
-async function SignOutButton() {
-  async function signOut() {
-    'use server'
-    const supabase = await createClient()
-    await supabase.auth.signOut()
-    redirect('/auth/login')
-  }
-
+function SignOutButton() {
   return (
     <form action={signOut}>
       <button

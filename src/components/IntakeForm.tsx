@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Send, Phone, FileText, Loader2, X } from 'lucide-react'
+import { Send, Phone, FileText, Loader2, X, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import CallStatusMachine from './CallStatusMachine'
 import OutcomeCard from './OutcomeCard'
-import type { CallStatus, JobSpec, CallOutcomeSummary } from '@/types'
+import SupplyMatchCard from './SupplyMatchCard'
+import type { CallStatus, JobSpec, CallOutcomeSummary, SupplyMatch, SupplierOption } from '@/types'
 
 interface FlowState {
   status: CallStatus
@@ -14,6 +15,7 @@ interface FlowState {
   jobSpec?: JobSpec
   outcome?: CallOutcomeSummary
   reportId?: string
+  supplyMatches?: SupplyMatch[]
   error?: string
 }
 
@@ -26,11 +28,23 @@ const STATUS_MESSAGES: Partial<Record<CallStatus, string>> = {
   done: 'Call complete — report saved.',
 }
 
-export default function IntakeForm() {
+interface IntakeFormProps {
+  onCallComplete?: () => void
+}
+
+export default function IntakeForm({ onCallComplete }: IntakeFormProps = {}) {
   const router = useRouter()
   const [request, setRequest] = useState('')
-  const [phone, setPhone] = useState('')
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [selectedSupplier, setSelectedSupplier] = useState<SupplierOption | null>(null)
   const [flow, setFlow] = useState<FlowState>({ status: 'idle', message: '' })
+
+  useEffect(() => {
+    fetch('/api/suppliers')
+      .then(r => r.ok ? r.json() : { suppliers: [] })
+      .then((data: { suppliers: SupplierOption[] }) => setSuppliers(data.suppliers ?? []))
+      .catch(() => {})
+  }, [])
 
   function updateFlow(patch: Partial<FlowState>) {
     setFlow(prev => ({ ...prev, ...patch }))
@@ -39,6 +53,7 @@ export default function IntakeForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (flow.status !== 'idle' && flow.status !== 'error') return
+    if (!effectivePhone) return
 
     updateFlow({ status: 'planning', message: STATUS_MESSAGES.planning ?? '', error: undefined })
 
@@ -47,7 +62,7 @@ export default function IntakeForm() {
       const planRes = await fetch('/api/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ naturalLanguageRequest: request, vendorPhoneNumber: phone }),
+        body: JSON.stringify({ naturalLanguageRequest: request, vendorPhoneNumber: effectivePhone }),
       })
       if (!planRes.ok) throw new Error('Planning failed')
       const { jobSpec } = await planRes.json() as { jobSpec: JobSpec }
@@ -61,7 +76,7 @@ export default function IntakeForm() {
       const callPromise = fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobSpec, vendorPhone: phone }),
+        body: JSON.stringify({ jobSpec, vendorPhone: effectivePhone }),
       })
 
       // Show "in-progress" after a short delay to let dialing feel real
@@ -82,16 +97,19 @@ export default function IntakeForm() {
           rawTranscript: callData.rawTranscript,
           jobSpec,
           naturalLanguageRequest: request,
+          supplierId: selectedSupplier?.id,
         }),
       })
       if (!extractRes.ok) throw new Error('Extraction failed')
-      const { report, outcome } = await extractRes.json() as {
+      const { report, outcome, supplyMatches } = await extractRes.json() as {
         report: { id: string }
         outcome: CallOutcomeSummary
+        supplyMatches?: SupplyMatch[]
       }
 
-      updateFlow({ status: 'done', message: STATUS_MESSAGES.done ?? '', outcome, reportId: report.id })
+      updateFlow({ status: 'done', message: STATUS_MESSAGES.done ?? '', outcome, reportId: report.id, supplyMatches: supplyMatches ?? [] })
       router.refresh()
+      onCallComplete?.()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Something went wrong'
       updateFlow({ status: 'error', message, error: message })
@@ -101,8 +119,10 @@ export default function IntakeForm() {
   function reset() {
     setFlow({ status: 'idle', message: '' })
     setRequest('')
-    setPhone('')
+    setSelectedSupplier(null)
   }
+
+  const effectivePhone = selectedSupplier?.phoneNumber ?? ''
 
   const isRunning = flow.status !== 'idle' && flow.status !== 'done' && flow.status !== 'error'
 
@@ -140,16 +160,36 @@ export default function IntakeForm() {
             <div className="flex-1">
               <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-1.5">
                 <Phone className="w-4 h-4 text-slate-400" />
-                Vendor phone number
+                Select supplier
               </label>
-              <input
-                type="tel"
-                value={phone}
-                onChange={e => setPhone(e.target.value)}
-                required
-                className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition"
-                placeholder="+65 6123 4567"
-              />
+
+              <div className="relative">
+                <select
+                  value={selectedSupplier?.id ?? ''}
+                  onChange={e => {
+                    const s = suppliers.find(s => s.id === e.target.value) ?? null
+                    setSelectedSupplier(s)
+                  }}
+                  required
+                  className="w-full appearance-none px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition pr-9"
+                >
+                  <option value="" disabled>
+                    {suppliers.length === 0 ? 'No suppliers registered yet…' : 'Choose a supplier…'}
+                  </option>
+                  {suppliers.map(s => (
+                    <option key={s.id} value={s.id} disabled={!s.phoneNumber}>
+                      {s.companyName}{!s.phoneNumber ? ' (no phone number set)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              </div>
+
+              {selectedSupplier && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {selectedSupplier.phoneNumber}
+                </p>
+              )}
             </div>
 
             <div className="flex items-end">
@@ -198,6 +238,9 @@ export default function IntakeForm() {
         <div className="space-y-3">
           <CallStatusMachine status="done" message="Call complete" />
           <OutcomeCard outcome={flow.outcome} reportId={flow.reportId} />
+          {flow.supplyMatches && flow.supplyMatches.length > 0 && (
+            <SupplyMatchCard matches={flow.supplyMatches} />
+          )}
           <button
             onClick={reset}
             className="text-sm text-slate-400 hover:text-slate-200 transition px-1"
