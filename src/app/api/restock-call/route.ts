@@ -13,8 +13,47 @@ function buildNLRequest(supplierName: string, items: CustomerInventoryItem[]): s
   return `Call ${supplierName} to place a restock order. We need to reorder the following items: ${itemLines}. Please confirm availability, unit pricing, and earliest delivery date for each item. Ask if a single consolidated delivery is possible.`
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+async function readCallStream(
+  response: Response,
+  onProgress: (msg: string) => void,
+): Promise<string> {
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let rawTranscript: string | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let newline = buffer.indexOf('\n')
+    while (newline !== -1) {
+      const line = buffer.slice(0, newline).trim()
+      buffer = buffer.slice(newline + 1)
+      newline = buffer.indexOf('\n')
+
+      if (!line) continue
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>
+        if (event.type === 'complete') {
+          const data = event.data as Record<string, unknown>
+          rawTranscript = data.rawTranscript as string
+        } else if (event.type === 'error') {
+          const err = event.error as Record<string, unknown>
+          throw new Error((err.message as string) ?? 'Call failed')
+        } else if (event.type === 'heartbeat' || event.type === 'progress') {
+          onProgress((event.message as string) ?? '')
+        }
+      } catch (e) {
+        if (e instanceof SyntaxError) continue
+        throw e
+      }
+    }
+  }
+
+  if (!rawTranscript) throw new Error('Call completed without transcript')
+  return rawTranscript
 }
 
 export async function POST(request: NextRequest) {
@@ -27,7 +66,6 @@ export async function POST(request: NextRequest) {
 
   const cookieHeader = request.headers.get('cookie') ?? ''
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
-
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
@@ -50,32 +88,42 @@ export async function POST(request: NextRequest) {
         const { jobSpec } = await planRes.json() as { jobSpec: Record<string, unknown> }
 
         emit({ status: 'queued', message: 'Call queued, connecting to supplier…', jobSpec })
-        await delay(800)
-        emit({ status: 'dialing', message: 'Dialing supplier number…' })
 
-        const callPromise = fetch(`${baseUrl}/api/call`, {
+        // Start the call immediately — /api/call is now a streaming NDJSON response
+        const callRes = await fetch(`${baseUrl}/api/call`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: cookieHeader },
           body: JSON.stringify({ jobSpec, vendorPhone: supplierPhone }),
         })
-
-        await delay(1200)
-        emit({ status: 'in-progress', message: 'Call in progress, AI is speaking with supplier…' })
-
-        const callRes = await callPromise
         if (!callRes.ok) throw new Error('Call failed')
-        const callData = await callRes.json() as { rawTranscript: string }
+
+        emit({ status: 'dialing', message: 'Dialing supplier number…' })
+
+        // Read the call stream, forwarding heartbeat/progress messages to client
+        const rawTranscript = await readCallStream(callRes, msg => {
+          emit({ status: 'in-progress', message: msg || 'Call in progress, AI is speaking with supplier…' })
+        })
 
         emit({ status: 'extracting', message: 'Claude is processing the transcript…' })
+
+        const restockItems = items.map(item => ({
+          inventoryItemId: item.id,
+          itemName: item.itemName,
+          unitsOrdered: Math.max(
+            item.restockThreshold * 2 - item.currentQuantity,
+            item.restockThreshold - item.currentQuantity + 5,
+          ),
+        }))
 
         const extractRes = await fetch(`${baseUrl}/api/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: cookieHeader },
           body: JSON.stringify({
-            rawTranscript: callData.rawTranscript,
+            rawTranscript,
             jobSpec,
             naturalLanguageRequest,
             supplierId,
+            restockItems,
           }),
         })
         if (!extractRes.ok) throw new Error('Extraction failed')

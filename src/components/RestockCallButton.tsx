@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { PhoneCall, CheckCircle2, Loader2, X, Package } from 'lucide-react'
+import { PhoneCall, CheckCircle2, X, Package } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import CallStatusMachine from './CallStatusMachine'
 import type { CustomerInventoryItem, CallStatus, JobSpec, CallOutcomeSummary } from '@/types'

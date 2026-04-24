@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Mail, Clock, ArrowRight } from 'lucide-react'
+import { ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Mail, Clock, ArrowRight, Package, Truck, CheckCheck } from 'lucide-react'
 import { cn, formatConfidence, formatDate } from '@/lib/utils'
-import type { CallReport } from '@/types'
+import OrderStatusUpdater from './OrderStatusUpdater'
+import type { CallReport, OrderStatus } from '@/types'
 
 const STEP_CONFIG = {
   'Mark as Resolved': {
@@ -27,15 +28,32 @@ const STEP_CONFIG = {
   },
 }
 
-interface ReportCardProps {
-  report: CallReport
+const ORDER_STATUS_CONFIG: Record<OrderStatus, { icon: typeof Package; label: string; badge: string }> = {
+  preparing: { icon: Package, label: 'Preparing', badge: 'bg-slate-700/60 text-slate-300 border-slate-600' },
+  in_transit: { icon: Truck, label: 'In Transit', badge: 'bg-amber-400/10 text-amber-400 border-amber-400/20' },
+  delivered: { icon: CheckCheck, label: 'Delivered', badge: 'bg-emerald-400/10 text-emerald-400 border-emerald-400/20' },
 }
 
-export default function ReportCard({ report }: ReportCardProps) {
+interface ReportCardProps {
+  report: CallReport
+  onStatusUpdated?: (reportId: string, status: OrderStatus) => void
+}
+
+export default function ReportCard({ report, onStatusUpdated }: ReportCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const [localOrderStatus, setLocalOrderStatus] = useState<OrderStatus>(report.orderStatus)
   const config = STEP_CONFIG[report.nextStep] ?? STEP_CONFIG['Needs Human Approval']
   const Icon = config.icon
   const confidence = report.confidenceScore ?? 0
+
+  const isRestock = !!report.supplierId
+  const orderConfig = ORDER_STATUS_CONFIG[localOrderStatus]
+  const OrderIcon = orderConfig.icon
+
+  function handleOrderUpdated(status: OrderStatus) {
+    setLocalOrderStatus(status)
+    onStatusUpdated?.(report.id, status)
+  }
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition">
@@ -47,13 +65,19 @@ export default function ReportCard({ report }: ReportCardProps) {
       <div className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            {/* Vendor + status */}
+            {/* Vendor + status badges */}
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-semibold text-white">{report.vendorName}</h3>
               <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium', config.badge)}>
                 <Icon className="w-3 h-3" />
                 {report.nextStep}
               </span>
+              {isRestock && (
+                <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium', orderConfig.badge)}>
+                  <OrderIcon className="w-3 h-3" />
+                  {orderConfig.label}
+                </span>
+              )}
             </div>
 
             {/* Request preview */}
@@ -74,12 +98,25 @@ export default function ReportCard({ report }: ReportCardProps) {
                 <span>Payment: {report.paymentDate}</span>
               )}
             </div>
+
+            {/* Mark as Delivered — only when in_transit */}
+            {isRestock && localOrderStatus === 'in_transit' && (
+              <div className="mt-3">
+                <OrderStatusUpdater
+                  reportId={report.id}
+                  nextStatus="delivered"
+                  label="Mark as Delivered"
+                  onUpdated={handleOrderUpdated}
+                  className="text-xs px-3 py-1.5"
+                />
+              </div>
+            )}
           </div>
 
           {/* Actions */}
           <div className="flex items-center gap-2 shrink-0">
             <Link
-              href={`/dashboard/${report.id}`}
+              href={`/customer/reports/${report.id}`}
               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
               title="View full report"
             >

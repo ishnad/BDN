@@ -56,11 +56,12 @@ const OUTCOME_SCHEMA = {
 
 export async function POST(request: NextRequest) {
   try {
-    const { rawTranscript, jobSpec, naturalLanguageRequest, supplierId } = await request.json() as {
+    const { rawTranscript, jobSpec, naturalLanguageRequest, supplierId, restockItems } = await request.json() as {
       rawTranscript: string
       jobSpec: JobSpec
       naturalLanguageRequest: string
       supplierId?: string
+      restockItems?: Array<{ inventoryItemId: string; itemName: string; unitsOrdered: number }>
     }
 
     const supabase = await createClient()
@@ -133,6 +134,7 @@ Determine confidence based on whether all required questions were answered and t
       .insert({
         user_id: user.id,
         supplier_id: supplierId ?? null,
+        restock_items: restockItems ?? null,
         vendor_name: outcome.vendorName,
         natural_language_request: naturalLanguageRequest,
         job_spec: jobSpec,

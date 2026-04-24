@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Mail, Clock, Building2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Mail, Clock, Building2, Package, Truck, CheckCheck } from 'lucide-react'
 import { cn, formatConfidence, formatDate } from '@/lib/utils'
-import type { CallReport } from '@/types'
+import OrderStatusUpdater from './OrderStatusUpdater'
+import type { CallReport, OrderStatus } from '@/types'
 
 const STEP_CONFIG = {
   'Mark as Resolved': {
@@ -26,15 +27,24 @@ const STEP_CONFIG = {
   },
 }
 
+const ORDER_STATUS_CONFIG: Record<OrderStatus, { icon: typeof Package; label: string; badge: string }> = {
+  preparing: { icon: Package, label: 'Preparing', badge: 'bg-slate-700/60 text-slate-300 border-slate-600' },
+  in_transit: { icon: Truck, label: 'In Transit', badge: 'bg-amber-400/10 text-amber-400 border-amber-400/20' },
+  delivered: { icon: CheckCheck, label: 'Delivered', badge: 'bg-emerald-400/10 text-emerald-400 border-emerald-400/20' },
+}
+
 interface IncomingTicketCardProps {
   ticket: CallReport & { customerName: string | null }
 }
 
 export default function IncomingTicketCard({ ticket }: IncomingTicketCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const [localOrderStatus, setLocalOrderStatus] = useState<OrderStatus>(ticket.orderStatus)
   const config = STEP_CONFIG[ticket.nextStep] ?? STEP_CONFIG['Needs Human Approval']
   const Icon = config.icon
   const confidence = ticket.confidenceScore ?? 0
+  const orderConfig = ORDER_STATUS_CONFIG[localOrderStatus]
+  const OrderIcon = orderConfig.icon
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-slate-700 transition">
@@ -53,6 +63,10 @@ export default function IncomingTicketCard({ ticket }: IncomingTicketCardProps) 
               <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium', config.badge)}>
                 <Icon className="w-3 h-3" />
                 {ticket.nextStep}
+              </span>
+              <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium', orderConfig.badge)}>
+                <OrderIcon className="w-3 h-3" />
+                {orderConfig.label}
               </span>
             </div>
 
@@ -74,6 +88,30 @@ export default function IncomingTicketCard({ ticket }: IncomingTicketCardProps) 
               <p className="mt-2 text-xs text-slate-400 bg-slate-800/60 rounded-lg px-3 py-2 line-clamp-2">
                 {ticket.resolutionStatus}
               </p>
+            )}
+
+            {/* Restock items summary */}
+            {ticket.restockItems && ticket.restockItems.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {ticket.restockItems.map((item, i) => (
+                  <span key={i} className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded-full text-xs">
+                    {item.itemName} ×{item.unitsOrdered}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Mark as In Transit — only when preparing */}
+            {localOrderStatus === 'preparing' && (
+              <div className="mt-3">
+                <OrderStatusUpdater
+                  reportId={ticket.id}
+                  nextStatus="in_transit"
+                  label="Mark as In Transit"
+                  onUpdated={status => setLocalOrderStatus(status)}
+                  className="text-xs px-3 py-1.5"
+                />
+              </div>
             )}
           </div>
 

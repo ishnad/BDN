@@ -47,6 +47,14 @@ export interface JobSpec {
   echoMitigationPrompt: string
 }
 
+export type OrderStatus = 'preparing' | 'in_transit' | 'delivered'
+
+export interface RestockItem {
+  inventoryItemId: string
+  itemName: string
+  unitsOrdered: number
+}
+
 export interface CallOutcomeSummary {
   vendorName: string
   resolutionStatus: string
@@ -58,10 +66,13 @@ export interface CallOutcomeSummary {
 export interface CallReport extends CallOutcomeSummary {
   id: string
   userId: string
+  supplierId: string | null
   naturalLanguageRequest: string
   jobSpec: JobSpec
   rawTranscript: string
   cleanedTranscript: string
+  orderStatus: OrderStatus
+  restockItems: RestockItem[] | null
   createdAt: string
 }
 

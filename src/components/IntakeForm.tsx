@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Send, Phone, FileText, Loader2, X, ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+
 import CallStatusMachine from './CallStatusMachine'
 import OutcomeCard from './OutcomeCard'
 import SupplyMatchCard from './SupplyMatchCard'

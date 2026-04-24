@@ -93,6 +93,7 @@ export function mapReport(row: Record<string, any>): CallReport {
   return {
     id: row.id,
     userId: row.user_id,
+    supplierId: row.supplier_id ?? null,
     vendorName: row.vendor_name,
     naturalLanguageRequest: row.natural_language_request,
     jobSpec: typeof row.job_spec === 'string' ? JSON.parse(row.job_spec) : row.job_spec,
@@ -102,6 +103,8 @@ export function mapReport(row: Record<string, any>): CallReport {
     paymentDate: row.payment_date,
     confidenceScore: row.confidence_score,
     nextStep: row.next_step,
+    orderStatus: row.order_status ?? 'preparing',
+    restockItems: row.restock_items ?? null,
     createdAt: row.created_at,
   }
 }
