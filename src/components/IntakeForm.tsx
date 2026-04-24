@@ -1,0 +1,215 @@
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Send, Phone, FileText, Loader2, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import CallStatusMachine from './CallStatusMachine'
+import OutcomeCard from './OutcomeCard'
+import type { CallStatus, JobSpec, CallOutcomeSummary } from '@/types'
+
+interface FlowState {
+  status: CallStatus
+  message: string
+  jobSpec?: JobSpec
+  outcome?: CallOutcomeSummary
+  reportId?: string
+  error?: string
+}
+
+const STATUS_MESSAGES: Partial<Record<CallStatus, string>> = {
+  planning: 'Claude is generating your call brief…',
+  queued: 'Call queued, connecting to vendor…',
+  dialing: 'Dialing vendor number…',
+  'in-progress': 'Call in progress, AI is speaking with vendor…',
+  extracting: 'Claude is processing the transcript…',
+  done: 'Call complete — report saved.',
+}
+
+export default function IntakeForm() {
+  const router = useRouter()
+  const [request, setRequest] = useState('')
+  const [phone, setPhone] = useState('')
+  const [flow, setFlow] = useState<FlowState>({ status: 'idle', message: '' })
+
+  function updateFlow(patch: Partial<FlowState>) {
+    setFlow(prev => ({ ...prev, ...patch }))
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (flow.status !== 'idle' && flow.status !== 'error') return
+
+    updateFlow({ status: 'planning', message: STATUS_MESSAGES.planning ?? '', error: undefined })
+
+    try {
+      // Step 1: Generate job spec
+      const planRes = await fetch('/api/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ naturalLanguageRequest: request, vendorPhoneNumber: phone }),
+      })
+      if (!planRes.ok) throw new Error('Planning failed')
+      const { jobSpec } = await planRes.json() as { jobSpec: JobSpec }
+
+      // Step 2: Execute call (simulated state progression)
+      updateFlow({ status: 'queued', message: STATUS_MESSAGES.queued ?? '', jobSpec })
+
+      await delay(800)
+      updateFlow({ status: 'dialing', message: STATUS_MESSAGES.dialing ?? '' })
+
+      const callPromise = fetch('/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobSpec, vendorPhone: phone }),
+      })
+
+      // Show "in-progress" after a short delay to let dialing feel real
+      await delay(1200)
+      updateFlow({ status: 'in-progress', message: STATUS_MESSAGES['in-progress'] ?? '' })
+
+      const callRes = await callPromise
+      if (!callRes.ok) throw new Error('Call failed')
+      const callData = await callRes.json() as { rawTranscript: string; callId: string }
+
+      // Step 3: Extract + save
+      updateFlow({ status: 'extracting', message: STATUS_MESSAGES.extracting ?? '' })
+
+      const extractRes = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawTranscript: callData.rawTranscript,
+          jobSpec,
+          naturalLanguageRequest: request,
+        }),
+      })
+      if (!extractRes.ok) throw new Error('Extraction failed')
+      const { report, outcome } = await extractRes.json() as {
+        report: { id: string }
+        outcome: CallOutcomeSummary
+      }
+
+      updateFlow({ status: 'done', message: STATUS_MESSAGES.done ?? '', outcome, reportId: report.id })
+      router.refresh()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Something went wrong'
+      updateFlow({ status: 'error', message, error: message })
+    }
+  }
+
+  function reset() {
+    setFlow({ status: 'idle', message: '' })
+    setRequest('')
+    setPhone('')
+  }
+
+  const isRunning = flow.status !== 'idle' && flow.status !== 'done' && flow.status !== 'error'
+
+  return (
+    <div className="space-y-4">
+      {/* Input form */}
+      {(flow.status === 'idle' || flow.status === 'error') && (
+        <form
+          onSubmit={handleSubmit}
+          className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4"
+        >
+          {flow.error && (
+            <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+              <X className="w-4 h-4 shrink-0" />
+              {flow.error}
+            </div>
+          )}
+
+          <div>
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-1.5">
+              <FileText className="w-4 h-4 text-slate-400" />
+              What should the AI ask the vendor?
+            </label>
+            <textarea
+              value={request}
+              onChange={e => setRequest(e.target.value)}
+              required
+              rows={3}
+              className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition resize-none"
+              placeholder="e.g. Call Acme Supplies and confirm the payment date and status of invoice #4821. Ask for the contact name handling this."
+            />
+          </div>
+
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-1.5">
+                <Phone className="w-4 h-4 text-slate-400" />
+                Vendor phone number
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                required
+                className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm transition"
+                placeholder="+65 6123 4567"
+              />
+            </div>
+
+            <div className="flex items-end">
+              <button
+                type="submit"
+                className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg text-sm transition"
+              >
+                <Send className="w-4 h-4" />
+                Dispatch Call
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* In-flight status */}
+      {isRunning && (
+        <div className="space-y-4">
+          <CallStatusMachine status={flow.status} message={flow.message} />
+          {flow.jobSpec && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Job Brief</p>
+              <p className="text-sm text-slate-300 font-medium">{flow.jobSpec.objective}</p>
+              <ul className="mt-2 space-y-1">
+                {flow.jobSpec.requiredQuestions.map((q, i) => (
+                  <li key={i} className="text-xs text-slate-400 flex gap-2">
+                    <span className="text-slate-600 shrink-0">{i + 1}.</span> {q}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Extracting state */}
+      {flow.status === 'extracting' && (
+        <div className="flex items-center gap-2 text-sm text-slate-400 px-1">
+          <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+          {flow.message}
+        </div>
+      )}
+
+      {/* Done — show outcome */}
+      {flow.status === 'done' && flow.outcome && flow.reportId && (
+        <div className="space-y-3">
+          <CallStatusMachine status="done" message="Call complete" />
+          <OutcomeCard outcome={flow.outcome} reportId={flow.reportId} />
+          <button
+            onClick={reset}
+            className="text-sm text-slate-400 hover:text-slate-200 transition px-1"
+          >
+            ← Start a new call
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
