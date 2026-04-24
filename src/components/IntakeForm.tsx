@@ -19,6 +19,53 @@ interface FlowState {
   error?: string
 }
 
+interface ApiError {
+  code: string
+  message: string
+}
+
+interface ApiEnvelope<TData> {
+  data: TData | null
+  error: ApiError | null
+}
+
+interface CallApiResponse {
+  callId: string
+  rawTranscript: string
+  audioUrl: string | null
+  isMock: boolean
+}
+
+type CallStreamStage = 'queued' | 'dialing' | 'in-progress'
+
+interface CallStreamProgressEvent {
+  type: 'progress'
+  stage: CallStreamStage
+  message: string
+}
+
+interface CallStreamHeartbeatEvent {
+  type: 'heartbeat'
+  elapsedSeconds: number
+  message: string
+}
+
+interface CallStreamCompleteEvent {
+  type: 'complete'
+  data: CallApiResponse
+}
+
+interface CallStreamErrorEvent {
+  type: 'error'
+  error: ApiError
+}
+
+type CallStreamEvent =
+  | CallStreamProgressEvent
+  | CallStreamHeartbeatEvent
+  | CallStreamCompleteEvent
+  | CallStreamErrorEvent
+
 const STATUS_MESSAGES: Partial<Record<CallStatus, string>> = {
   planning: 'Claude is generating your call brief…',
   queued: 'Call queued, connecting to vendor…',
@@ -84,8 +131,34 @@ export default function IntakeForm({ onCallComplete }: IntakeFormProps = {}) {
       updateFlow({ status: 'in-progress', message: STATUS_MESSAGES['in-progress'] ?? '' })
 
       const callRes = await callPromise
-      if (!callRes.ok) throw new Error('Call failed')
-      const callData = await callRes.json() as { rawTranscript: string; callId: string }
+      if (!callRes.ok) {
+        let message = 'Call failed'
+
+        try {
+          const callPayload = await callRes.json() as ApiEnvelope<CallApiResponse>
+          message = callPayload.error?.message ?? message
+        } catch {
+          // Keep fallback message when the response body is not JSON.
+        }
+
+        throw new Error(message)
+      }
+
+      const callData = await readCallStream(callRes, event => {
+        if (event.type === 'heartbeat') {
+          updateFlow({ status: 'in-progress', message: event.message })
+          return
+        }
+
+        if (event.type === 'progress') {
+          if (event.stage === 'in-progress') {
+            updateFlow({ status: 'in-progress', message: event.message })
+            return
+          }
+
+          updateFlow({ message: event.message })
+        }
+      })
 
       // Step 3: Extract + save
       updateFlow({ status: 'extracting', message: STATUS_MESSAGES.extracting ?? '' })
@@ -251,6 +324,180 @@ export default function IntakeForm({ onCallComplete }: IntakeFormProps = {}) {
       )}
     </div>
   )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isCallStreamStage(value: unknown): value is CallStreamStage {
+  return value === 'queued' || value === 'dialing' || value === 'in-progress'
+}
+
+function isCallApiResponse(value: unknown): value is CallApiResponse {
+  if (!isRecord(value)) {
+    return false
+  }
+
+  return (
+    typeof value.callId === 'string' &&
+    typeof value.rawTranscript === 'string' &&
+    (typeof value.audioUrl === 'string' || value.audioUrl === null) &&
+    typeof value.isMock === 'boolean'
+  )
+}
+
+function parseCallStreamEvent(line: string): CallStreamEvent | null {
+  const trimmedLine = line.trim()
+  if (!trimmedLine.startsWith('{')) {
+    return null
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(trimmedLine) as unknown
+  } catch {
+    return null
+  }
+
+  if (!isRecord(parsed) || typeof parsed.type !== 'string') {
+    return null
+  }
+
+  if (parsed.type === 'progress') {
+    if (!isCallStreamStage(parsed.stage) || typeof parsed.message !== 'string') {
+      return null
+    }
+
+    return {
+      type: 'progress',
+      stage: parsed.stage,
+      message: parsed.message,
+    }
+  }
+
+  if (parsed.type === 'heartbeat') {
+    if (typeof parsed.elapsedSeconds !== 'number' || typeof parsed.message !== 'string') {
+      return null
+    }
+
+    return {
+      type: 'heartbeat',
+      elapsedSeconds: parsed.elapsedSeconds,
+      message: parsed.message,
+    }
+  }
+
+  if (parsed.type === 'complete') {
+    if (!isCallApiResponse(parsed.data)) {
+      return null
+    }
+
+    return {
+      type: 'complete',
+      data: parsed.data,
+    }
+  }
+
+  if (parsed.type === 'error') {
+    if (!isRecord(parsed.error) || typeof parsed.error.code !== 'string' || typeof parsed.error.message !== 'string') {
+      return null
+    }
+
+    return {
+      type: 'error',
+      error: {
+        code: parsed.error.code,
+        message: parsed.error.message,
+      },
+    }
+  }
+
+  return null
+}
+
+async function readCallStream(
+  response: Response,
+  onEvent: (event: CallStreamEvent) => void
+): Promise<CallApiResponse> {
+  let completeEvent: CallApiResponse | null = null
+  let streamError: Error | null = null
+  let shouldStop = false
+
+  const handleLine = (line: string) => {
+    const parsedEvent = parseCallStreamEvent(line)
+    if (!parsedEvent) {
+      return
+    }
+
+    onEvent(parsedEvent)
+
+    if (parsedEvent.type === 'error') {
+      streamError = new Error(parsedEvent.error.message)
+      shouldStop = true
+      return
+    }
+
+    if (parsedEvent.type === 'complete') {
+      completeEvent = parsedEvent.data
+      shouldStop = true
+    }
+  }
+
+  if (!response.body) {
+    const responseText = await response.text()
+    for (const line of responseText.split('\n')) {
+      handleLine(line)
+      if (shouldStop) {
+        break
+      }
+    }
+  } else {
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (!shouldStop) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+
+      let newlineIndex = buffer.indexOf('\n')
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex)
+        buffer = buffer.slice(newlineIndex + 1)
+        handleLine(line)
+
+        if (shouldStop) {
+          await reader.cancel()
+          break
+        }
+
+        newlineIndex = buffer.indexOf('\n')
+      }
+    }
+
+    if (!shouldStop) {
+      buffer += decoder.decode()
+      const remaining = buffer.trim()
+      if (remaining.length > 0) {
+        handleLine(remaining)
+      }
+    }
+  }
+
+  if (streamError) {
+    throw streamError
+  }
+
+  if (!completeEvent) {
+    throw new Error('Call stream ended before completion')
+  }
+
+  return completeEvent
 }
 
 function delay(ms: number): Promise<void> {
